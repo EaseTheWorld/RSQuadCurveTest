@@ -10,16 +10,32 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.SeekBar;
+import android.widget.Toast;
 
-import com.easetheworld.renderscript.curve.QuadCurve;
+import com.easetheworld.renderscript.curve.AbsQuadCurve;
+import com.easetheworld.renderscript.curve.CircleQuadCurve;
+import com.easetheworld.renderscript.curve.DistanceQuadCurve;
 
 public class SingleCurveTestActivity extends Activity {
+
+    enum CurveMethod {
+        CIRCLE("Good for radius variant and connected-curves."),
+        DISTANCE("Good for color variant and single curve.");
+
+        private String desc;
+
+        private CurveMethod(String desc) {
+            this.desc = desc;
+        }
+    }
+
+    static final String CURVE_METHOD = "curveType";
 
     private ImageView canvas;
     private float maxDistance2;
 
     private final PointF[] points = new PointF[3];
-    private QuadCurve quadCurve;
+    private AbsQuadCurve quadCurve;
     private Bitmap bitmap;
 
     private static final float MIN_RADIUS_DIP = 10f;
@@ -47,7 +63,15 @@ public class SingleCurveTestActivity extends Activity {
         maxDistance2 = maxDistance * maxDistance;
 
         bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        quadCurve = new QuadCurve(this);
+        String curveMethodName = getIntent().getStringExtra(CURVE_METHOD);
+        CurveMethod curveMethod = CurveMethod.valueOf(curveMethodName);
+        if (curveMethod == CurveMethod.CIRCLE) {
+            quadCurve = new CircleQuadCurve(this);
+        } else {
+            quadCurve = new DistanceQuadCurve(this);
+        }
+
+        Toast.makeText(this, curveMethod.desc, Toast.LENGTH_LONG).show();
 
         points[0] = new PointF(w / 4, h / 4);
         points[1] = new PointF(w / 2, h * 3 / 4);

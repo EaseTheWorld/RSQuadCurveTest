@@ -9,7 +9,8 @@ import android.view.View;
 import android.widget.ImageView;
 import android.widget.SeekBar;
 
-import com.easetheworld.renderscript.curve.QuadCurve;
+import com.easetheworld.renderscript.curve.AbsQuadCurve;
+import com.easetheworld.renderscript.curve.CircleQuadCurve;
 
 public class FingerTouchActivity extends Activity {
 
@@ -18,7 +19,7 @@ public class FingerTouchActivity extends Activity {
 
     private ImageView curveView;
     private Bitmap bitmap;
-    private QuadCurve quadCurve;
+    private AbsQuadCurve quadCurve;
     private SeekBar sensitivitySeekBar;
 
     @Override
@@ -34,7 +35,7 @@ public class FingerTouchActivity extends Activity {
             }
         });
 
-        quadCurve = new QuadCurve(this);
+        quadCurve = new CircleQuadCurve(this);
         quadCurve.setBlurRadiusInDip(MIN_RADIUS_DIP);
         quadCurve.setColor(0xff000000);
 
@@ -97,9 +98,13 @@ public class FingerTouchActivity extends Activity {
             clear();
             break;
         case android.R.id.button2:
-            startActivity(new Intent(this, SingleCurveTestActivity.class));
+            startActivity(new Intent(this, SingleCurveTestActivity.class)
+                    .putExtra(SingleCurveTestActivity.CURVE_METHOD, SingleCurveTestActivity.CurveMethod.CIRCLE.name()));
+            break;
+        case android.R.id.button3:
+            startActivity(new Intent(this, SingleCurveTestActivity.class)
+                    .putExtra(SingleCurveTestActivity.CURVE_METHOD, SingleCurveTestActivity.CurveMethod.DISTANCE.name()));
             break;
         }
     }
-
 }

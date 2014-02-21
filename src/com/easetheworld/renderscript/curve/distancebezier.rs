@@ -2,6 +2,7 @@
 #pragma rs java_package_name(com.easetheworld.renderscript.curve)
 
 #include "debug.rsh"
+#include "util.rsh"
 
 #define USE_NEWTON 0
 #define EPSILON 0.0001f
@@ -19,8 +20,6 @@
 
 #define PI_2_3 M_PI * 2.f / 3.f
 
-#define POINTS_NUM 50
-
 typedef struct {
 	// given data
     float x0;
@@ -29,16 +28,14 @@ typedef struct {
     float y1;
     float x2;
     float y2;
-    float radius;
-    float radius2;
+	float4 c0;
+	float4 c1;
+	float4 c2;
+	float r0;
+	float r1;
+	float r2;
     bool useFirstCap;
     bool useLastCap; // not used. to fill the gap between curves, last cap is always used.
-    float radius0;
-    float radius1;
-    float4 color0;
-    float4 color1;
-    float blur0;
-    float blur1;
     
    	// precalculated data 
     int type;
@@ -56,6 +53,14 @@ typedef struct {
     float bx2by2;
     float axbxayby;
     float tc;
+    
+    float ar;
+    float br;
+    float cr;
+
+    float4 ac;
+    float4 bc;
+    float4 cc;
 } QuadCurve;
 
 static QuadCurve curve1;
@@ -63,14 +68,15 @@ static QuadCurve curve2;
 static QuadCurve *curCurve = NULL;
 static QuadCurve *prevCurve = NULL;
 
-float radius0 = 30.f;
-float radius1 = 30.f;
+static float3 lastPoint;
+static float4 lastColor;
+
 float blurRadius = 0.f;
 
-static float4 color0;
-static float4 color1;
+rs_script script;
+rs_allocation allocation;
 
-static void fillQuadCurve(QuadCurve *curve, float x0, float y0, float x1, float y1, float x2, float y2, bool useFirstCap) {
+static void fillQuadCurve(QuadCurve *curve, float x0, float y0, float r0, float4 c0, float x1, float y1, float r1, float4 c1, float x2, float y2, float r2, float4 c2, bool useFirstCap) {
 	curve->x0 = x0;
 	curve->y0 = y0;
 	curve->x1 = x1;
@@ -81,6 +87,12 @@ static void fillQuadCurve(QuadCurve *curve, float x0, float y0, float x1, float 
 	curve->x21 = x2 - x1;
 	curve->y10 = y1 - y0;
 	curve->y21 = y2 - y1;
+	curve->r0 = r0;
+	curve->r1 = r1;
+	curve->r2 = r2;
+	curve->c0 = c0;
+	curve->c1 = c1;
+	curve->c2 = c2;
 	curve->useFirstCap = useFirstCap;
 
 	// quad curve
@@ -103,6 +115,14 @@ static void fillQuadCurve(QuadCurve *curve, float x0, float y0, float x1, float 
         curve->axbxayby = curve->ax * curve->bx + curve->ay * curve->by;
         curve->tc = -curve->axbxayby / curve->ax2ay2;
     }
+    
+    curve->ar = curve->r0 - 2.f * curve->r1 + curve->r2;
+    curve->br = 2.f * (curve->r1 - curve->r0);
+    curve->cr = curve->r0;
+    
+    curve->ac = curve->c0 - 2.f * curve->c1 + curve->c2;
+    curve->bc = 2.f * (curve->c1 - curve->c0);
+    curve->cc = curve->c0;
 }
 
 typedef struct {
@@ -138,6 +158,16 @@ static void fillPreCalData(PreCalData *data, float px, float py, QuadCurve* curv
     data->cx2cy2 = data->f0;
     data->cx = x0px;
     data->cy = y0py;
+}
+
+static float getRadius(float t, QuadCurve *curve) {
+	float t2 = t * t;
+	return t2 * curve->ar + t * curve->br + curve->cr;
+}
+
+static float4 getColor(float t, QuadCurve *curve) {
+	float t2 = t * t;
+	return t2 * curve->ac + t * curve->bc + curve->cc;
 }
 
 static float f(float t, PreCalData* data) {
@@ -580,36 +610,22 @@ static float3 getDistanceFromCurve(QuadCurve *curve, uint32_t x, uint32_t y) {
 
 void root(const uchar4 *v_in, uchar4 *v_out, const void* usrData, uint32_t x, uint32_t y) {
     QuadCurve* curve = (QuadCurve*)usrData;
-
-	float3 prevDistance = {0.f, 0.f, IN_RANGE};
-	/*
-	if (prevCurve != NULL) {
-		prevDistance = getDistanceFromCurve(prevCurve, x, y);
-	}
-	*/
  	float3 curDistance = getDistanceFromCurve(curve, x, y);
     float min = curDistance.x;
     float minDistance = curDistance.y;
     float edge = curDistance.z;
     
-    float radius;
-    if (radius0 == radius1) {
-   		radius = radius0;
-    } else {
-    	radius = radius0 + (radius1 - radius0) * min;
-    }
-    float radius2 = radius * radius;
-    
-    
     // TODO
     // if curve end is rectangle, it looks 
     //if (edge != IN_RANGE) return; // good for normal. normal highlights overlap area.
     //if (!curve->useFirstCap && edge == BEFORE_RANGE) return; // good for blend max
+    
+    float radius = getRadius(min, curve);
 
     float alpha = getAlphaFromDistance(sqrt(minDistance), radius);
     if (alpha > 0.f) {
     	float4 srcRgba = rsUnpackColor8888(*v_out);
-    	float4 color = color0 + (color1 - color0) * min;
+    	float4 color = getColor(min, curve);
     	float3 dstRgb = color.rgb;
     	// TODO
     	// blend normal makes overlap too dark. and if draw slowly saw-shape occurs. good for cross-overlap.
@@ -617,87 +633,41 @@ void root(const uchar4 *v_in, uchar4 *v_out, const void* usrData, uint32_t x, ui
     	// what shall I do?
     	// IDEA1 : blend max for just-previous curve. normal for rest. maybe this will solve saw-shape for neighbor curve and cross-overlap for far curve.
     	// -> FAIL. if slow
-    	float4 dstRgba;
-    	if (true && prevDistance.x >= T0 && prevDistance.y <= radius2) {
-    		dstRgba = blendColorMax(srcRgba, dstRgb, alpha);
-    	} else {
-    		dstRgba = blendColorNormal(srcRgba, dstRgb, alpha);
-    	}
+    	float4 dstRgba = blendColorMax(srcRgba, dstRgb, alpha);
     	*v_out = rsPackColorTo8888(dstRgba.r, dstRgba.g, dstRgba.b, dstRgba.a);
     }
 }
 
-void drawQuadCurve(rs_script script, rs_allocation in, float x0, float y0, float x1, float y1, float x2, float y2, bool useFirstCap) {
-	if (curCurve == NULL) {
-		curCurve = &curve2;
-		prevCurve = NULL;
-	} else if (curCurve == &curve1) {
-		curCurve = &curve2;
-		prevCurve = &curve1;
-	} else {
-		curCurve = &curve1;
-		prevCurve = &curve2;
-	}
+void moveTo(float x, float y, float r, int c) {
+	float3Set(&lastPoint, x, y, r);
+	float4Set(&lastColor, c);
 	
-	rsDebug("prevCurve", prevCurve);
-	rsDebug("curCurve", curCurve);
+	prevCurve = NULL;
+	curCurve = &curve1;
+}
 
-	fillQuadCurve(curCurve, x0, y0, x1, y1, x2, y2, useFirstCap);
+void quadTo(float x1, float y1, float r1, int c1, float x2, float y2, float r2, int c2) {
+	float x0 = lastPoint.x;
+	float y0 = lastPoint.y;
+	float r0 = lastPoint.z;
+	float4 color0;
+	float4Copy(&color0, &lastColor);
+	float4 color1;
+	float4Set(&color1, c1);
+	float4 color2;
+	float4Set(&color2, c2);
+	fillQuadCurve(curCurve, x0, y0, r0, color0, x1, y1, r1, color1, x2, y2, r2, color2, false);
+	float3Set(&lastPoint, x2, r2, r2);
+	float4Copy(&lastColor, &color2);
+	
 	rs_script_call_t sc;
 
-	float radius = fmax(radius0, radius1);
-	sc.xStart = fmin(fmin(x0, x1), x2) - radius;
-	sc.xEnd = fmax(fmax(x0, x1), x2) + radius;
-	sc.yStart = fmin(fmin(y0, y1), y2) - radius;
-	sc.yEnd = fmax(fmax(y0, y1), y2) + radius;
+	float maxr = fmax(fmax(r0, r1), r2);
+	sc.xStart = fmin(fmin(x0, x1), x2) - maxr;
+	sc.xEnd = fmax(fmax(x0, x1), x2) + maxr;
+	sc.yStart = fmin(fmin(y0, y1), y2) - maxr;
+	sc.yEnd = fmax(fmax(y0, y1), y2) + maxr;
 	sc.zStart = 0;
 	sc.zEnd = 0;
-	rsForEach(script, in, in, curCurve, sizeof(QuadCurve), &sc);
-}
-
-void testQuadCurve(rs_script script, rs_allocation in, float x0, float y0, float x1, float y1, float x2, float y2, int x, int y) {
-	if (curCurve == NULL) {
-		curCurve = &curve2;
-		prevCurve = NULL;
-	} else if (curCurve == &curve1) {
-		curCurve = &curve2;
-		prevCurve = &curve1;
-	} else {
-		curCurve = &curve1;
-		prevCurve = &curve2;
-	}
-	fillQuadCurve(curCurve, x0, y0, x1, y1, x2, y2, true);
-	rs_script_call_t sc;
-
-	sc.xStart = x;
-	sc.xEnd = sc.xStart + 1;
-	sc.yStart = y;
-	sc.yEnd = sc.yStart + 1;
-	sc.zStart = 0;
-	sc.zEnd = 0;
-	rsForEach(script, in, in, curCurve, sizeof(QuadCurve), &sc);
-	
-	bool a = true;
-	
-	//findCubicRoots(1.f, 0.f, -1.f, 0.f);
-	//findCubicRoots(1.f, 0.f, 0.f, 0.f);
-}
-
-static float4 getColor8888(int color) {
-	uchar a = (color & 0xff000000) >> 24;
-	uchar r = (color & 0x00ff0000) >> 16;
-	uchar g = (color & 0x0000ff00) >> 8;
-	uchar b = (color & 0x000000ff);
-	uchar4 cc = {r, g, b, a};
-	return rsUnpackColor8888(cc);
-}
-
-void __attribute__((overloadable)) setColor(int c) {
-    color0 = getColor8888(c);
-    color1 = color0;
-}
-
-void __attribute__((overloadable)) setColor(int c0, int c1) {
-    color0 = getColor8888(c0);
-    color1 = getColor8888(c1);
+	rsForEach(script, allocation, allocation, curCurve, sizeof(QuadCurve), &sc);
 }

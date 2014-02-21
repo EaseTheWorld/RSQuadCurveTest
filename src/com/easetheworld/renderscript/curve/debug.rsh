@@ -1,6 +1,3 @@
-#pragma version(1)
-#pragma rs java_package_name(com.easetheworld.renderscript.curve)
-
 #define DEBUG 0
 #if DEBUG == 1
 #define DBG(tag, v0) rsDebug(tag, v0)
